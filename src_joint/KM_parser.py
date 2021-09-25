@@ -1698,6 +1698,7 @@ class ChartParser(nn.Module):
                 self.tupe_dict = {v.split(" ")[0]: k for k, v in enumerate(content)}
             self.tupe_max_len = 512
             # TODO: Get the max len parameter, just debug it hehe.
+            self.project_tupe = nn.Linear(768, ex_dim, bias=False)
 
         if hparams.use_roberta:
             self.roberta_tokenizer, self.roberta = get_roberta(
@@ -2122,7 +2123,7 @@ class ChartParser(nn.Module):
             src_lenghts = np.zeros((len(sentences), self.tupe_max_len), dtype=int)
             src_inputs = np.zeros((len(sentences), self.tupe_max_len), dtype=int)
 
-            subword_max_len = 0
+            subword_max_len = self.tupe_max_len
             for snum, sentence in enumerate(sentences):
                 tokens = []
                 word_start_mask = []
@@ -2161,7 +2162,7 @@ class ChartParser(nn.Module):
                         word_tokens = ["</s>"]
                     else:
                         word_tokens = self.tupe_fastBPE.apply([word])
-                    for _ in range(len(word_tokens)):
+                    for _ in range(len(word_tokens[0].split(" "))):
                         word_start_mask.append(0)
                         word_end_mask.append(0)
                     # No need anymore
@@ -2172,6 +2173,7 @@ class ChartParser(nn.Module):
                 # tokens.append("[SEP]")
                 # word_start_mask.append(1)
                 # word_end_mask.append(1)
+                all_word_end_mask[snum, : len(word_end_mask)] = word_end_mask
 
                 input_ids = []
                 for i, t in enumerate(tokens):
@@ -2197,7 +2199,7 @@ class ChartParser(nn.Module):
             features, _ = self.tupe(
                 **sample,
                 features_only=True,
-                classification_head_name="sentence_classification_head",
+                # Teste sem isso aqui classification_head_name="sentence_classification_head",
             )
             # all_encoder_layers, _ = self.bert(
             #     all_input_ids, attention_mask=all_input_mask
@@ -2205,13 +2207,17 @@ class ChartParser(nn.Module):
             del _
             # features = all_encoder_layers[-1]
 
+            all_word_end_mask = from_numpy(
+                np.ascontiguousarray(all_word_end_mask[:, :subword_max_len])
+            )
+
             if self.encoder is not None:
                 features_packed = features.masked_select(
                     all_word_end_mask.to(DTYPE).unsqueeze(-1)
                 ).reshape(-1, features.shape[-1])
 
                 # For now, just project the features from the last word piece in each word
-                extra_content_annotations = self.project_bert(features_packed)
+                extra_content_annotations = None  # self.project_tupe(features_packed)
         # region Chegou a hora do show
 
         if self.xlnet is not None:
