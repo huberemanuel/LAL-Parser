@@ -1696,7 +1696,7 @@ class ChartParser(nn.Module):
             ) as dict_f:
                 content = dict_f.readlines()
                 self.tupe_dict = {v.split(" ")[0]: k for k, v in enumerate(content)}
-            self.tupe_max_len = 768
+            self.tupe_max_len = 512
             # TODO: Get the max len parameter, just debug it hehe.
 
         if hparams.use_roberta:
