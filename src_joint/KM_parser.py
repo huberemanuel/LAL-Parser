@@ -2189,13 +2189,10 @@ class ChartParser(nn.Module):
                     [input_ids, np.ones(self.tupe_max_len - len(input_ids))]
                 )
 
-            cuda0 = torch.device("cuda:0")
             sample = {
-                "src_inputs": torch.tensor(src_inputs),
-                "src_lengths": torch.tensor(src_lenghts),
+                "src_tokens": torch.tensor(src_inputs).cuda(),
+                "src_lengths": torch.tensor(src_lenghts).cuda(),
             }
-            sample["src_inputs"].to(cuda0)
-            sample["src_lengths"].to(cuda0)
 
             features, _ = self.tupe(
                 **sample,
