@@ -2120,10 +2120,11 @@ class ChartParser(nn.Module):
                 (len(sentences), self.tupe_max_len), dtype=int
             )
             all_word_end_mask = np.zeros((len(sentences), self.tupe_max_len), dtype=int)
-            src_lenghts = np.zeros((len(sentences), self.tupe_max_len), dtype=int)
+            src_lenghts = np.zeros((len(sentences), 1), dtype=int)
             src_inputs = np.zeros((len(sentences), self.tupe_max_len), dtype=int)
+            oovs = np.zeros((len(sentences), 1))
 
-            subword_max_len = self.tupe_max_len
+            subword_max_len = 0
             for snum, sentence in enumerate(sentences):
                 tokens = []
                 word_start_mask = []
@@ -2131,8 +2132,8 @@ class ChartParser(nn.Module):
 
                 # Vamos tentar comentando
                 # tokens.append("[CLS]")
-                word_start_mask.append(1)
-                word_end_mask.append(1)
+                # word_start_mask.append(1)
+                # word_end_mask.append(1)
 
                 # if self.bert_transliterate is None:
                 # <s> 0
@@ -2182,19 +2183,28 @@ class ChartParser(nn.Module):
                     elif i == len(tokens) - 1:
                         input_ids.append(2)
                     else:
+                        if t.lower() not in self.tupe_dict.keys():
+                            oovs[snum] += 1
                         input_ids.append(self.tupe_dict.get(t.lower(), 3))
                 # input_ids = list(map(lambda x: self.tupe_dict[x], tokens))
 
                 # Adicionar padding e tamanho das sentenças
                 src_lenghts[snum] = len(input_ids)
+                subword_max_len = max(subword_max_len, src_lenghts[snum][0])
                 src_inputs[snum] = np.concatenate(
                     [input_ids, np.ones(self.tupe_max_len - len(input_ids))]
                 )
+
+            src_inputs = src_inputs[:, :subword_max_len]
 
             sample = {
                 "src_tokens": torch.tensor(src_inputs).cuda(),
                 "src_lengths": torch.tensor(src_lenghts).cuda(),
             }
+
+            # print("OOVS total: ", np.sum(oovs), " Total tokens: ", np.sum(src_lenghts))
+            # print("OOVS por sent: ", oovs)
+            # print("Sents length: ", src_lenghts)
 
             features, _ = self.tupe(
                 **sample,
@@ -2217,7 +2227,7 @@ class ChartParser(nn.Module):
                 ).reshape(-1, features.shape[-1])
 
                 # For now, just project the features from the last word piece in each word
-                extra_content_annotations = None  # self.project_tupe(features_packed)
+                extra_content_annotations = self.project_tupe(features_packed)
         # region Chegou a hora do show
 
         if self.xlnet is not None:
