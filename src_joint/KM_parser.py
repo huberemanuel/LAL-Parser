@@ -36,10 +36,42 @@ import const_decoder
 
 # import src_dep_const_test.chart_helper as chart_helper
 import hpsg_decoder
+import torch
+from DeBERTa import deberta
 
 import makehp
 import trees
 import utils
+
+
+class MyDeBERTa(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Your existing model code
+        self.deberta = deberta.DeBERTa(
+            pre_trained="base"
+        )  # Or 'large' 'base-mnli' 'large-mnli' 'xlarge' 'xlarge-mnli' 'xlarge-v2' 'xxlarge-v2'
+        # Your existing model code
+        # do inilization as before
+        #
+        self.deberta.apply_state()  # Apply the pre-trained model of DeBERTa at the end of the constructor
+        #
+
+    def forward(self, input_ids, input_mask):
+        # The inputs to DeBERTa forward are
+        # `input_ids`: a torch.LongTensor of shape [batch_size, sequence_length] with the word token indices in the vocabulary
+        # `token_type_ids`: an optional torch.LongTensor of shape [batch_size, sequence_length] with the token types indices selected in [0, 1].
+        #    Type 0 corresponds to a `sentence A` and type 1 corresponds to a `sentence B` token (see BERT paper for more details).
+        # `attention_mask`: an optional parameter for input mask or attention mask.
+        #   - If it's an input mask, then it will be torch.LongTensor of shape [batch_size, sequence_length] with indices selected in [0, 1].
+        #      It's a mask to be used if the input sequence length is smaller than the max input sequence length in the current batch.
+        #      It's the mask that we typically use for attention when a batch has varying length sentences.
+        #   - If it's an attention mask then if will be torch.LongTensor of shape [batch_size, sequence_length, sequence_length].
+        #      In this case, it's a mask indicate which tokens in the sequence should be attended by other tokens in the sequence.
+        # `output_all_encoded_layers`: whether to output results of all encoder layers, default, True
+        # encoding = deberta.bert(input_ids)[-1]
+        return self.deberta(input_ids)
+
 
 START = "<START>"
 STOP = "<STOP>"
@@ -1594,6 +1626,7 @@ class ChartParser(nn.Module):
                 or hparams.use_bert
                 or hparams.use_xlnet
                 or hparams.use_tupe
+                or hparams.use_deberta
             ):
                 cun = cun + 1
             if cun > 0:
@@ -1699,6 +1732,13 @@ class ChartParser(nn.Module):
             self.tupe_max_len = 512
             # TODO: Get the max len parameter, just debug it hehe.
             self.project_tupe = nn.Linear(768, ex_dim, bias=False)
+
+        if hparams.use_deberta:
+            self.deberta = MyDeBERTa()
+            vocab_path, vocab_type = deberta.load_vocab(pretrained_id="base")
+            self.deberta_tokenizer = deberta.tokenizers[vocab_type](vocab_path)
+            self.deberta_max_len = 512
+            self.project_deberta = nn.Linear(768, ex_dim, bias=False)
 
         if hparams.use_roberta:
             self.roberta_tokenizer, self.roberta = get_roberta(
@@ -2111,6 +2151,84 @@ class ChartParser(nn.Module):
 
                 # For now, just project the features from the last word piece in each word
                 extra_content_annotations = self.project_bert(features_packed)
+
+        if self.deberta is not None:
+            all_input_ids = np.zeros((len(sentences), self.deberta_max_len), dtype=int)
+            all_input_mask = np.zeros((len(sentences), self.deberta_max_len), dtype=int)
+            all_word_start_mask = np.zeros(
+                (len(sentences), self.deberta_max_len), dtype=int
+            )
+            all_word_end_mask = np.zeros(
+                (len(sentences), self.deberta_max_len), dtype=int
+            )
+
+            subword_max_len = 0
+            for snum, sentence in enumerate(sentences):
+                tokens = []
+                word_start_mask = []
+                word_end_mask = []
+
+                tokens.append("[CLS]")
+                word_start_mask.append(1)
+                word_end_mask.append(1)
+
+                cleaned_words = []
+                for _, word in sentence:
+                    cleaned_words.append(word)
+
+                for word in cleaned_words:
+                    word_tokens = self.deberta_tokenizer.tokenize(word)
+                    for _ in range(len(word_tokens)):
+                        word_start_mask.append(0)
+                        word_end_mask.append(0)
+                    word_start_mask[len(tokens)] = 1
+                    word_end_mask[-1] = 1
+                    tokens.extend(word_tokens)
+                tokens.append("[SEP]")
+                word_start_mask.append(1)
+                word_end_mask.append(1)
+
+                input_ids = self.deberta_tokenizer.convert_tokens_to_ids(tokens)
+
+                # The mask has 1 for real tokens and 0 for padding tokens. Only real
+                # tokens are attended to.
+                input_mask = [1] * len(input_ids)
+
+                subword_max_len = max(subword_max_len, len(input_ids))
+
+                all_input_ids[snum, : len(input_ids)] = input_ids
+                all_input_mask[snum, : len(input_mask)] = input_mask
+                all_word_start_mask[snum, : len(word_start_mask)] = word_start_mask
+                all_word_end_mask[snum, : len(word_end_mask)] = word_end_mask
+
+            all_input_ids = from_numpy(
+                np.ascontiguousarray(all_input_ids[:, :subword_max_len])
+            )
+            all_input_mask = from_numpy(
+                np.ascontiguousarray(all_input_mask[:, :subword_max_len])
+            )
+            all_word_start_mask = from_numpy(
+                np.ascontiguousarray(all_word_start_mask[:, :subword_max_len])
+            )
+            all_word_end_mask = from_numpy(
+                np.ascontiguousarray(all_word_end_mask[:, :subword_max_len])
+            )
+            features = {
+                "input_ids": torch.tensor(all_input_ids, dtype=torch.int).cuda(),
+                "input_mask": torch.tensor(all_input_mask, dtype=torch.int).cuda(),
+            }
+            all_encoder_layers = self.deberta(
+                features["input_ids"], features["input_mask"]
+            )["embeddings"]
+            features = all_encoder_layers[-1]
+
+            if self.encoder is not None:
+                features_packed = features.masked_select(
+                    all_word_end_mask.to(DTYPE).unsqueeze(-1)
+                ).reshape(-1, features.shape[-1])
+
+                # For now, just project the features from the last word piece in each word
+                extra_content_annotations = self.project_deberta(features_packed)
 
         # region Chegou a hora do show
         if self.tupe is not None:

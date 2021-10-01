@@ -1,3 +1,6 @@
 [submodule "src_joint/TUPE"]
 	path = src_joint/TUPE
 	url = https://github.com/huberemanuel/TUPE
+[submodule "DeBERTa"]
+	path = DeBERTa
+	url = https://github.com/microsoft/DeBERTa.git

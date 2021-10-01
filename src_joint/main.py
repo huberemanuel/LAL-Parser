@@ -88,6 +88,7 @@ def make_hparams():
         use_elmo=False,
         use_bert=False,
         use_tupe=False,
+        use_deberta=False,
         use_xlnet=False,
         use_roberta=False,
         use_bert_only=False,
